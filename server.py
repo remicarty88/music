@@ -128,7 +128,7 @@ def healthz():
     return "ok"
 
 
-def cover_url(uri, size="200x200"):
+def cover_url(uri, size="400x400"):
     return f"https://{uri.replace('%%', size)}" if uri else None
 
 

@@ -36,7 +36,7 @@ const fmt = (sec) => {
   sec = Math.max(0, Math.floor(sec || 0));
   return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0");
 };
-const big = (url) => (url ? url.replace("200x200", "400x400") : "");
+const big = (url) => (url ? url.replace("400x400", "1000x1000") : "");
 const coverImg = (url, cls = "cover") => `<img class="${cls}" src="${esc(url || "")}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">`;
 
 let toastTimer = null;
@@ -354,7 +354,7 @@ function updateMediaSession() {
   try {
     navigator.mediaSession.metadata = new MediaMetadata({
       title: cur.title, artist: cur.artists, album: (cur.album && cur.album.title) || "",
-      artwork: cur.cover ? [{ src: big(cur.cover), sizes: "400x400" }] : [],
+      artwork: cur.cover ? [{ src: big(cur.cover), sizes: "1000x1000" }] : [],
     });
   } catch (_) {}
 }
