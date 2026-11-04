@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import os
+import threading
 import time
 from urllib.parse import parse_qsl
 
@@ -287,20 +288,43 @@ def pick_download(infos, quality):
     return min(pool, key=lambda i: abs(br(i) - target))
 
 
-@app.get("/api/stream/<track_id>")
-def stream(track_id):
-    quality = request.args.get("quality", "high")
-    # Прямые ссылки живут недолго, поэтому получаем их в момент воспроизведения.
+# Получение прямой ссылки — самый медленный запрос (идёт через прокси), поэтому
+# кэшируем результат: повторное воспроизведение и префетч следующего трека отдают
+# ссылку мгновенно, без похода в Яндекс.
+STREAM_TTL = 1800  # 30 минут: ссылки живут дольше, но обновляем с запасом
+_stream_cache = {}
+_stream_lock = threading.Lock()
+
+
+def get_direct(track_id, quality):
+    key = (track_id, quality)
+    now = time.time()
+    with _stream_lock:
+        hit = _stream_cache.get(key)
+        if hit and hit[0] > now:
+            return hit[1]
     infos = client.tracks_download_info(track_id, get_direct_links=True)
     if not infos:
-        return jsonify({"error": "Нет источников для этого трека"}), 404
+        return None
     best = pick_download(infos, quality)
-    return jsonify({
+    payload = {
         "url": best.direct_link,
         "bitrate": best.bitrate_in_kbps,
         "codec": best.codec,
         "quality": quality,
-    })
+    }
+    with _stream_lock:
+        _stream_cache[key] = (now + STREAM_TTL, payload)
+    return payload
+
+
+@app.get("/api/stream/<track_id>")
+def stream(track_id):
+    quality = request.args.get("quality", "high")
+    payload = get_direct(track_id, quality)
+    if not payload:
+        return jsonify({"error": "Нет источников для этого трека"}), 404
+    return jsonify(payload)
 
 
 # ---------- Нравится / не нравится ----------
