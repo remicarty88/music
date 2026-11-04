@@ -1,0 +1,4 @@
+flask>=3.0
+yandex-music>=3.2
+gunicorn>=22.0
+PySocks>=1.7
