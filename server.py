@@ -16,7 +16,8 @@ import threading
 import time
 from urllib.parse import parse_qsl
 
-from flask import Flask, g, jsonify, request
+import requests
+from flask import Flask, Response, g, jsonify, request, stream_with_context
 from werkzeug.exceptions import HTTPException
 from yandex_music import Client
 
@@ -98,6 +99,11 @@ def verify_init_data(raw, max_age=86400):
         return None
 
 
+def tg_init_data():
+    """initData из заголовка (fetch) или из ?t= — элемент <audio> не умеет свои заголовки."""
+    return request.headers.get("X-Tg-Init-Data") or request.args.get("t") or ""
+
+
 @app.before_request
 def guard_api():
     if not request.path.startswith("/api/"):
@@ -106,7 +112,7 @@ def guard_api():
         if ON_RAILWAY and not ALLOW_PUBLIC:
             return jsonify({"error": "Сервер не настроен: задайте переменную BOT_TOKEN."}), 503
         return None
-    user = verify_init_data(request.headers.get("X-Tg-Init-Data", ""))
+    user = verify_init_data(tg_init_data())
     if user is None:
         return jsonify({"error": "Откройте приложение из Telegram."}), 401
     if ALLOWED_IDS and str(user.get("id")) not in ALLOWED_IDS:
@@ -219,8 +225,10 @@ def search_artists():
 def likes():
     if not TOKEN:
         return jsonify({"error": "Нужен токен YANDEX_MUSIC_TOKEN"}), 401
-    short = client.users_likes_tracks().tracks[:50]
+    short = (client.users_likes_tracks().tracks or [])[:50]
     ids = [f"{s.id}:{s.album_id}" if s.album_id else str(s.id) for s in short]
+    if not ids:  # у пользователя пока нет любимых треков
+        return jsonify([])
     return jsonify([track_dto(t) for t in client.tracks(ids)])
 
 
@@ -325,6 +333,65 @@ def stream(track_id):
     if not payload:
         return jsonify({"error": "Нет источников для этого трека"}), 404
     return jsonify(payload)
+
+
+# ---------- Прокси аудиопотока ----------
+# Эквалайзер на фронтенде работает через Web Audio, а ему нужен источник с нашего же
+# домена: Яндекс отдаёт 403 на кросс-доменные запросы (защита от хотлинка). Поэтому
+# гоним байты через сервер, сохраняя Range — иначе не будет перемотки.
+@app.route("/api/audio/<track_id>", methods=["GET", "HEAD"])
+def audio(track_id):
+    quality = request.args.get("quality", "high")
+    payload = get_direct(track_id, quality)
+    if not payload:
+        return jsonify({"error": "Нет источников для этого трека"}), 404
+
+    fwd = {"User-Agent": "Mozilla/5.0"}
+    if request.headers.get("Range"):
+        fwd["Range"] = request.headers["Range"]
+
+    def fetch(url):
+        return requests.get(url, headers=fwd, stream=True, timeout=30)
+
+    up = fetch(payload["url"])
+    if up.status_code in (403, 404, 410):  # подписанная ссылка успела протухнуть — берём свежую
+        up.close()
+        with _stream_lock:
+            _stream_cache.pop((track_id, quality), None)
+        payload = get_direct(track_id, quality)
+        up = fetch(payload["url"]) if payload else None
+
+    if up is None or up.status_code >= 400:
+        code = up.status_code if up else 502
+        if up:
+            up.close()
+        return jsonify({"error": f"Яндекс вернул {code}"}), 502
+
+    # Яндекс отдаёт application/octet-stream, из-за чего браузер отказывается играть
+    # ("no supported source was found"). Принудительно ставим аудио-тип по кодеку.
+    ctype = {"aac": "audio/aac", "mp3": "audio/mpeg"}.get(payload.get("codec", ""), "audio/mpeg")
+    headers = {
+        "Content-Type": ctype,
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
+    }
+    for h in ("Content-Length", "Content-Range"):
+        if up.headers.get(h):
+            headers[h] = up.headers[h]
+
+    if request.method == "HEAD":
+        up.close()
+        return Response(status=up.status_code, headers=headers)
+
+    def body():
+        try:
+            for chunk in up.iter_content(64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            up.close()
+
+    return Response(stream_with_context(body()), status=up.status_code, headers=headers)
 
 
 # ---------- Нравится / не нравится ----------

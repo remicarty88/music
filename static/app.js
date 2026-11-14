@@ -53,6 +53,30 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} },
 };
 
+/* ---------- Эквалайзер для автозвука ----------
+   Конкретные частоты (Гц), как на магнитоле. Нажал на частоту — крутишь её ползунком.
+   Гейны в дБ (-12…+12). Список с упором на низкие (бас/саб), как просил пользователь. */
+const EQ_FREQS = [33, 35, 37, 40, 45, 50, 56, 63, 71, 80, 90, 100, 112, 125, 140, 160, 180, 200, 224, 250, 280, 315, 355, 400, 450, 500, 560, 630, 710, 800, 900, 1000, 1120, 1250, 1400, 1600, 1800, 2000, 2240, 2500, 2800, 3150, 3550, 4000, 4500, 5000, 5600, 6300, 7100, 8000, 9000, 10000, 11200, 12500, 14000, 16000];
+const EQ_PRESETS = {
+  flat: { name: "Стандарт", gain: {} },
+  warm: { name: "33-37Гц", gain: { 33: 10, 35: 12, 37: 11, 40: 8, 45: 5, 50: 3, 56: 1, 63: 0, 71: -1, 80: -1, 100: -2, 125: -2, 160: -3, 200: -3, 250: -2, 500: -1, 1000: 0, 2000: 0, 4000: 1, 8000: 2, 16000: 2 } },
+};
+
+function loadEqGain() {
+  try {
+    const g = JSON.parse(store.get("ton.eqGain") || "null");
+    if (g && typeof g === "object") {
+      const out = {};
+      EQ_FREQS.forEach((f) => { out[f] = Number(g[f]) || 0; });
+      return out;
+    }
+  } catch (_) {}
+  const p = EQ_PRESETS[store.get("ton.eqPreset")];
+  const out = {};
+  EQ_FREQS.forEach((f) => { out[f] = ((p && p.gain[f]) || 0); });
+  return out;
+}
+
 /* ---------- Состояние ---------- */
 const S = {
   authorized: false,
@@ -60,6 +84,10 @@ const S = {
   quality: ["economy", "standard", "high"].includes(store.get("ton.quality")) ? store.get("ton.quality") : "high",
   shuffle: store.get("ton.shuffle") === "1",
   repeat: ["off", "all", "one"].includes(store.get("ton.repeat")) ? store.get("ton.repeat") : "off",
+  eqOn: store.get("ton.eqOn") === "1",
+  eqPreset: store.get("ton.eqPreset") || "flat",
+  eqGain: loadEqGain(),
+  eqActive: Number(store.get("ton.eqActive")) || 80,   // выбранная частота, которую крутим
 };
 
 /* ---------- Нравится ---------- */
@@ -95,29 +123,59 @@ const artistLinks = (item) => {
   return list.map((a) => `<a class="lnk" href="#/artist/${esc(a.id)}">${esc(a.name)}</a>`).join(", ");
 };
 
-/* ---------- Плеер ---------- */
-const audio = $("#audio");
+/* ---------- Плеер ----------
+   Два <audio> по очереди: пока звучит один, во втором уже загружен следующий трек.
+   Поэтому переключение происходит мгновенно, без ожидания сети. */
+const audioEls = [$("#audioA"), $("#audioB")];
+let ai = 0;                       // индекс активного элемента
+let audio = audioEls[0];          // активный элемент — с ним работает весь остальной код
+const spare = () => audioEls[1 - ai];
+const swap = () => { ai = 1 - ai; audio = audioEls[ai]; };
+
 let queue = [], qi = -1, cur = null, loadToken = 0;
 let wave = null;          // {station, name, batchId, pending}
 let viewKind = null;
 let viewTracks = [];
 let seeking = false;
 
-/* iOS разрешает звук только после касания. Прогреваем элемент тишиной при первом касании,
-   тогда play() после сетевого запроса уже не блокируется. */
+const streamKey = (t, q = S.quality) => t.id + "|" + q;
+const streamCache = new Map();    // "id|quality" -> кодек/битрейт (для подписи качества)
+let prefetchKey = null;           // что сейчас готовим в свободном элементе
+const qinfo = (s) => `${String(s.codec || "").toUpperCase()}, ${s.bitrate || "?"} кбит/с`;
+
+/* Звук идёт через наш прокси: так источник same-origin и работает Web Audio (эквалайзер).
+   <audio> не умеет свои заголовки, поэтому initData Telegram передаём в ?t=. */
+const audioUrl = (t, q = S.quality) =>
+  `/api/audio/${encodeURIComponent(t.id)}?quality=${q}&t=${encodeURIComponent((tg && tg.initData) || "")}`;
+
+async function getStream(t, quality = S.quality) {
+  const key = streamKey(t, quality);
+  if (streamCache.has(key)) return streamCache.get(key);
+  const s = await api(`stream/${encodeURIComponent(t.id)}?quality=${quality}`);
+  streamCache.set(key, s);
+  return s;
+}
+
+function showQinfo(t) {
+  getStream(t).then((s) => { if (cur === t) $("#qinfo").textContent = qinfo(s); }).catch(() => {});
+}
+
+/* iOS разрешает звук только после касания. Прогреваем тишиной оба элемента при первом
+   касании, тогда play() после сетевого запроса уже не блокируется. */
 let unlocked = false;
 function unlockAudio() {
   if (unlocked) return;
   unlocked = true;
-  if (audio.src) return;
+  ensureEq();                       // AudioContext создаём в жесте пользователя (требование iOS)
+  if (audioEls.some((el) => el.src)) return;
   const dv = new DataView(new ArrayBuffer(44));
   const w = (o, s) => [...s].forEach((c, i) => dv.setUint8(o + i, c.charCodeAt(0)));
   w(0, "RIFF"); dv.setUint32(4, 36, true); w(8, "WAVEfmt "); dv.setUint32(16, 16, true);
   dv.setUint16(20, 1, true); dv.setUint16(22, 1, true); dv.setUint32(24, 8000, true);
   dv.setUint32(28, 16000, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
   w(36, "data"); dv.setUint32(40, 0, true);
-  audio.src = URL.createObjectURL(new Blob([dv], { type: "audio/wav" }));
-  audio.play().then(() => audio.pause()).catch(() => {});
+  const url = URL.createObjectURL(new Blob([dv], { type: "audio/wav" }));
+  audioEls.forEach((el) => { el.src = url; el.play().then(() => el.pause()).catch(() => {}); });
 }
 ["touchend", "click"].forEach((ev) => document.addEventListener(ev, unlockAudio, { once: true, capture: true }));
 
@@ -126,22 +184,27 @@ function fb(type, t, seconds) {
   api("wave/feedback", { type, station: wave.station, track_id: t ? t.id : undefined, seconds: seconds || 0, batch_id: wave.batchId }).catch(() => {});
 }
 
-async function loadStream(t, token, resumeAt, play) {
-  const s = await api(`stream/${encodeURIComponent(t.id)}?quality=${S.quality}`);
-  if (token !== loadToken) return false;
-  audio.src = s.url;
-  if (resumeAt) audio.addEventListener("loadedmetadata", () => { audio.currentTime = resumeAt; }, { once: true });
-  if (play) {
-    try { await audio.play(); }
-    catch (e) { if (e.name === "NotAllowedError") toast("Нажмите «Играть», чтобы начать"); else throw e; }
-  }
-  $("#qinfo").textContent = `${String(s.codec || "").toUpperCase()}, ${s.bitrate || "?"} кбит/с`;
-  return true;
+/* Заранее кладём следующий трек в свободный элемент — он успевает загрузиться. */
+function prefetchNext() {
+  if (!cur) return;
+  const n = nextIndex();
+  if (n < 0) return;
+  const t = queue[n];
+  if (!t) return;
+  const el = spare();
+  const key = streamKey(t);
+  if (prefetchKey === key && el.dataset.key === key) return;
+  prefetchKey = key;
+  el.dataset.key = key;
+  el.src = audioUrl(t);
+  try { el.load(); } catch (_) {}
+  getStream(t).catch(() => {});     // заодно прогреваем кэш ссылки на сервере
 }
 
 async function playList(list, i) {
   wave = null;
   queue = list.slice();
+  prefetchKey = null;
   updateModeButtons();
   await playAt(i);
 }
@@ -158,13 +221,41 @@ async function playAt(i) {
   updateMediaSession();
   if (wave && queue.length - qi <= 2) topUpWave();
   if (viewKind === "wave") renderWaveList();
+
+  const el = spare();
+  const key = streamKey(cur);
+  const prepared = el.dataset.key === key;   // следующий трек уже загружен заранее?
+
+  audio.pause();            // глушим текущий звук
+  prefetchKey = null;       // следующий пересчитаем после старта
+  swap();                   // активным становится подготовленный элемент
+  audio.currentTime = 0;
+  if (!prepared) { audio.dataset.key = key; audio.src = audioUrl(cur); }
+
   try {
-    if (await loadStream(cur, token, 0, true) && wave) fb("trackStarted", cur, 0);
+    await audio.play();
+    resumeAudio();
+    if (wave) fb("trackStarted", cur, 0);
+    prefetchNext();
+    showQinfo(cur);         // кодек/битрейт — отдельным запросом, старт не задерживает
   } catch (e) {
     if (token !== loadToken) return;
-    $("#qinfo").textContent = "Не удалось воспроизвести: " + e.message;
-    toast("Не удалось воспроизвести трек");
+    if (e.name === "NotAllowedError") toast("Нажмите «Играть», чтобы начать");
+    else { $("#qinfo").textContent = "Не удалось воспроизвести: " + e.message; toast("Не удалось воспроизвести трек"); }
   }
+}
+
+/* Какой трек пойдёт следующим при текущем режиме (-1 — продолжения нет). */
+function nextIndex() {
+  if (wave) return qi + 1 < queue.length ? qi + 1 : -1;
+  if (S.shuffle && queue.length > 1) {
+    let n;
+    do { n = Math.floor(Math.random() * queue.length); } while (n === qi);
+    return n;
+  }
+  if (qi + 1 < queue.length) return qi + 1;
+  if (S.repeat === "all") return 0;
+  return -1;
 }
 
 async function advance({ auto = false, feedback = true } = {}) {
@@ -176,13 +267,8 @@ async function advance({ auto = false, feedback = true } = {}) {
     return;
   }
   if (auto && S.repeat === "one") { audio.currentTime = 0; return audio.play(); }
-  let n;
-  if (S.shuffle && queue.length > 1) {
-    do { n = Math.floor(Math.random() * queue.length); } while (n === qi);
-  } else if (qi + 1 < queue.length) n = qi + 1;
-  else if (S.repeat === "all") n = 0;
-  else return;
-  return playAt(n);
+  const n = nextIndex();
+  if (n >= 0) return playAt(n);
 }
 
 function renderNowPlaying() {
@@ -242,6 +328,7 @@ async function startWave(station, name) {
     if (!r.tracks.length) return toast("Волна пока пуста, выберите другую станцию");
     wave = { station, name, batchId: r.batch_id, pending: null };
     queue = r.tracks;
+    prefetchKey = null;
     updateModeButtons();
     fb("radioStarted", null, 0);
     await playAt(0);
@@ -283,18 +370,25 @@ function setPlayIcon(paused) {
   document.querySelectorAll("#play use, #miniPlay use").forEach((u) => u.setAttribute("href", paused ? "#i-play" : "#i-pause"));
   document.body.classList.toggle("paused", paused);
 }
-audio.addEventListener("play", () => cur && setPlayIcon(false));
-audio.addEventListener("pause", () => setPlayIcon(true));
-audio.addEventListener("ended", () => { if (!cur) return; setPlayIcon(true); advance({ auto: true }); });
-audio.addEventListener("loadedmetadata", () => { if (cur) $("#dur").textContent = fmt(audio.duration); });
-audio.addEventListener("timeupdate", () => {
-  if (!cur || !audio.duration) return;
-  const p = (audio.currentTime / audio.duration) * 100;
-  $("#miniBar").style.width = p + "%";
-  if (seeking) return;
-  $("#cur").textContent = fmt(audio.currentTime);
-  $("#seek").value = p * 10;
-  $("#seek").style.setProperty("--p", p + "%");
+/* Слушатели вешаем на оба элемента; события неактивного (загружаемого заранее) игнорируем. */
+audioEls.forEach((el) => {
+  el.addEventListener("play", () => { if (el === audio && cur) setPlayIcon(false); });
+  el.addEventListener("pause", () => { if (el === audio) setPlayIcon(true); });
+  el.addEventListener("ended", () => {
+    if (el !== audio || !cur) return;
+    setPlayIcon(true);
+    advance({ auto: true });
+  });
+  el.addEventListener("loadedmetadata", () => { if (el === audio && cur) $("#dur").textContent = fmt(el.duration); });
+  el.addEventListener("timeupdate", () => {
+    if (el !== audio || !cur || !el.duration) return;
+    const p = (el.currentTime / el.duration) * 100;
+    $("#miniBar").style.width = p + "%";
+    if (seeking) return;
+    $("#cur").textContent = fmt(el.currentTime);
+    $("#seek").value = p * 10;
+    $("#seek").style.setProperty("--p", p + "%");
+  });
 });
 $("#seek").addEventListener("input", (e) => {
   seeking = true;
@@ -312,11 +406,186 @@ document.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click",
   S.quality = b.dataset.q;
   store.set("ton.quality", S.quality);
   updateModeButtons();
+  prefetchKey = null;
   if (!cur || !audio.src) return;
   const pos = audio.currentTime, playing = !audio.paused, token = ++loadToken;
-  try { await loadStream(cur, token, pos, playing); }
-  catch (err) { $("#qinfo").textContent = "Не удалось сменить качество: " + err.message; }
+  audio.dataset.key = streamKey(cur);
+  audio.src = audioUrl(cur);
+  audio.addEventListener("loadedmetadata", () => { audio.currentTime = pos; }, { once: true });
+  try {
+    if (playing) await audio.play();
+    resumeAudio();
+    showQinfo(cur);
+    prefetchNext();
+  } catch (err) { $("#qinfo").textContent = "Не удалось сменить качество: " + err.message; }
 }));
+
+/* ---------- Эквалайзер «автозвук» ----------
+   Цепь: <audio> → MediaElementSource → фильтры по всем частотам → выход.
+   В UI выбираешь конкретную частоту (33, 35, 37 Гц и т.д.) и крутишь её уровень.
+   Гейны меняются на ходу — «герцовку» выставляешь прямо во время трека. */
+let actx = null, eqNodes = null;
+
+function ensureEq() {
+  if (actx) return;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  try {
+    actx = new Ctx();
+    const input = actx.createGain();
+    // Один фильтр на каждую частоту. Крайние — полочные (low/highshelf),
+    // остальные — пиковые (peaking), как в реальном эквалайзере.
+    const filters = EQ_FREQS.map((f, i) => {
+      const n = actx.createBiquadFilter();
+      n.type = i === EQ_FREQS.length - 1 ? "highshelf" : "peaking";
+      n.frequency.value = f;
+      // Широкие полосы (низкий Q): узкие полосы резонируют и «пердят».
+      n.Q.value = 0.8;
+      n.gain.value = 0;
+      return n;
+    });
+    let node = input;
+    filters.forEach((f) => { node.connect(f); node = f; });
+    // Мастер-gain: при подъёме низа общий уровень растёт и клиппирует.
+    // Опускаем выход, чтобы бас был мощным, но без искажений.
+    const master = actx.createGain();
+    master.gain.value = 1.0;
+    node.connect(master);
+    master.connect(actx.destination);
+    audioEls.forEach((el) => actx.createMediaElementSource(el).connect(input));
+    eqNodes = { filters, master };
+    applyEq();
+  } catch (_) {
+    actx = null; eqNodes = null;   // не вышло — просто играем без эквалайзера
+  }
+}
+
+function applyEq() {
+  if (!eqNodes) return;
+  let maxBoost = 0;
+  eqNodes.filters.forEach((f) => {
+    const g = S.eqOn ? (S.eqGain[f.frequency.value] || 0) : 0;
+    f.gain.value = g;
+    if (g > maxBoost) maxBoost = g;
+  });
+  // Чем сильнее поднят эквалайзер — тем больше опускаем мастер,
+  // чтобы не было клиппинга («пердения»).
+  if (eqNodes.master) {
+    const reduce = Math.pow(10, -maxBoost / 20);
+    eqNodes.master.gain.setTargetAtTime(reduce, actx.currentTime, 0.02);
+  }
+}
+
+function resumeAudio() {
+  if (actx && actx.state === "suspended") actx.resume().catch(() => {});
+}
+
+function saveEq() {
+  store.set("ton.eqOn", S.eqOn ? "1" : "0");
+  store.set("ton.eqPreset", S.eqPreset);
+  store.set("ton.eqGain", JSON.stringify(S.eqGain));
+  store.set("ton.eqActive", String(S.eqActive));
+}
+
+const fmtDb = (v) => (v > 0 ? "+" + v : String(v));
+const fmtHz = (f) => (f >= 1000 ? (f / 1000) + "k" : String(f));
+
+function renderEqPresets() {
+  const items = [["off", "Выкл"], ...Object.entries(EQ_PRESETS).map(([k, p]) => [k, p.name])];
+  $("#eqPresets").innerHTML = items.map(([k, name]) => {
+    const on = k === "off" ? !S.eqOn : (S.eqOn && S.eqPreset === k);
+    return `<button class="chip ${on ? "on" : ""}" data-eqpreset="${k}">${esc(name)}</button>`;
+  }).join("");
+  $("#eqPresets").querySelectorAll("[data-eqpreset]").forEach((b) => {
+    b.addEventListener("click", () => { haptic(); setEqPreset(b.dataset.eqpreset); });
+  });
+}
+
+/* Кнопки частот + один ползунок для выбранной частоты. */
+function renderEqFreqs() {
+  const wrap = $("#eqFreqs");
+  wrap.innerHTML = EQ_FREQS.map((f) => {
+    const v = S.eqGain[f] || 0;
+    const on = f === S.eqActive;
+    const mark = v !== 0;   // подсветим частоты, у которых есть коррекция
+    return `<button class="eq-freq ${on ? "on" : ""} ${mark ? "mark" : ""}" data-freq="${f}">
+      <span class="eq-f-hz">${fmtHz(f)}</span>
+      <span class="eq-f-db">${fmtDb(v)}</span>
+    </button>`;
+  }).join("");
+  wrap.querySelectorAll("[data-freq]").forEach((b) => {
+    b.addEventListener("click", () => { haptic(); setActiveFreq(+b.dataset.freq); });
+  });
+  renderEqSlider();
+}
+
+function renderEqSlider() {
+  const f = S.eqActive;
+  const v = S.eqGain[f] || 0;
+  $("#eqSliderVal").textContent = fmtHz(f) + " Гц · " + fmtDb(v) + " дБ";
+  const s = $("#eqSlider");
+  s.value = v;
+  s.style.setProperty("--p", ((v + 12) / 24) * 100 + "%");
+  s.setAttribute("aria-label", f + " Гц");
+}
+
+/* При клике на 33-37 Гц — плавный суб-бас. Узкие пики резонируют и «пердят»,
+   поэтому горб широкий (Q низкий), а мастер-gain сам опускает уровень против клиппинга. */
+function setActiveFreq(f) {
+  S.eqActive = f;
+  if (f <= 50) {
+    const sub = { 33: 10, 35: 12, 37: 11, 40: 8, 45: 5, 50: 2 };
+    EQ_FREQS.forEach((fr) => { S.eqGain[fr] = sub[fr] != null ? sub[fr] : (fr < 200 ? -2 : 0); });
+    S.eqOn = true;
+    S.eqPreset = "custom";
+  }
+  saveEq();
+  applyEq();
+  renderEqPresets();
+  renderEqFreqs();
+}
+
+$("#eqSlider").addEventListener("input", () => {
+  const f = S.eqActive, v = +$("#eqSlider").value;
+  S.eqGain[f] = v;
+  S.eqOn = true;
+  S.eqPreset = "custom";
+  saveEq();
+  applyEq();
+  $("#eqSliderVal").textContent = fmtHz(f) + " Гц · " + fmtDb(v) + " дБ";
+  $("#eqSlider").style.setProperty("--p", ((v + 12) / 24) * 100 + "%");
+  // обновим подпись у кнопки частоты и подсветку
+  const btn = $("#eqFreqs").querySelector(`[data-freq="${f}"]`);
+  if (btn) {
+    btn.querySelector(".eq-f-db").textContent = fmtDb(v);
+    btn.classList.toggle("mark", v !== 0);
+  }
+  $("#eqPresets").querySelectorAll(".chip").forEach((c) => c.classList.remove("on"));
+});
+
+function setEqPreset(k) {
+  if (k === "off") {
+    S.eqOn = false;
+  } else if (EQ_PRESETS[k]) {
+    S.eqOn = true;
+    S.eqPreset = k;
+    const src = EQ_PRESETS[k].gain;
+    EQ_FREQS.forEach((f) => { S.eqGain[f] = src[f] || 0; });
+  }
+  saveEq();
+  applyEq();
+  renderEqPresets();
+  renderEqFreqs();
+}
+
+$("#eqToggle").addEventListener("click", () => {
+  const show = $("#eqBody").hidden;
+  $("#eqBody").hidden = !show;
+  $("#eqToggle").setAttribute("aria-expanded", show ? "true" : "false");
+});
+
+renderEqPresets();
+renderEqFreqs();
 
 /* Экран блокировки и медиаклавиши */
 function updateMediaSession() {
@@ -604,7 +873,7 @@ async function init() {
     if (/Telegram|BOT_TOKEN|доступ/i.test(e.message)) { setView(`<div class="msg err">${ic("lock")}<br>${esc(e.message)}</div>`); return; }
   }
   api("status").then((s) => {
-    $("#who").textContent = s.authorized ? (s.login || "вход выполнен") + (s.plus ? ", Плюс" : "") : "без входа, отрывки по 30 с";
+    $("#who").textContent = s.authorized ? "" : "без входа, отрывки по 30 с";
   }).catch(() => {});
   route();
 }
