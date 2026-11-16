@@ -306,6 +306,7 @@ function renderNowPlaying() {
   $("#sheetBg").style.backgroundImage = cur.cover ? `url("${big(cur.cover)}")` : "";
   $("#sheetKind").textContent = wave ? wave.name : "Сейчас играет";
   $("#dur").textContent = fmt(cur.duration);
+  if (typeof lyrOpen !== "undefined" && lyrOpen) lyrLoad();
 }
 
 function markPlaying() {
@@ -485,6 +486,58 @@ if (msOK) {
   });
 }
 
+/* ---------- Текст песни ---------- */
+const lyrCache = new Map();
+let lyrOpen = false, lyrData = null, lyrActive = -1, lyrFor = null;
+function lyrRender(d) {
+  const b = $("#lyricsBody");
+  lyrData = d; lyrActive = -1;
+  if (d.synced) {
+    b.innerHTML = `<div class="lyr-pad"></div>` + d.lines.map((l, i) => `<p class="lyr-line" data-i="${i}" data-t="${l.t}">${esc(l.s) || "♪"}</p>`).join("") + `<div class="lyr-pad"></div>`;
+  } else if (d.text) {
+    b.innerHTML = `<div class="lyr-plain">${d.text.split(/\n\s*\n/).map((p) => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`).join("")}</div>`;
+  } else {
+    b.innerHTML = `<div class="msg">${ic("music")}<br>Для этого трека текста нет</div>`;
+  }
+  b.scrollTop = 0;
+  lyrSync(true);
+}
+async function lyrLoad() {
+  if (!cur) return;
+  const t = cur;
+  lyrFor = t.id;
+  $("#lyricsTitle").innerHTML = `<b>${esc(t.title)}</b><span>${esc(t.artists)}</span>`;
+  if (lyrCache.has(t.id)) return lyrRender(lyrCache.get(t.id));
+  $("#lyricsBody").innerHTML = `<div class="skel" style="padding:8px 4px">${"<div class=\"skel-row\" style=\"min-height:44px;grid-template-columns:1fr\"><b><u style=\"width:80%\"></u></b></div>".repeat(7)}</div>`;
+  try {
+    const d = await api("lyrics/" + encodeURIComponent(t.id));
+    lyrCache.set(t.id, d);
+    if (lyrFor === t.id) lyrRender(d);
+  } catch (e) {
+    if (lyrFor === t.id) $("#lyricsBody").innerHTML = `<div class="msg err">Не удалось загрузить текст</div>`;
+  }
+}
+function lyrSync(force) {
+  if (!lyrOpen || !lyrData || !lyrData.synced) return;
+  const now = audio.currentTime + 0.25;
+  let idx = -1;
+  for (let i = 0; i < lyrData.lines.length; i++) { if (lyrData.lines[i].t <= now) idx = i; else break; }
+  if (idx === lyrActive && !force) return;
+  lyrActive = idx;
+  const els = $("#lyricsBody").querySelectorAll(".lyr-line");
+  els.forEach((el, i) => { el.classList.toggle("on", i === idx); el.classList.toggle("past", i < idx); });
+  if (idx >= 0 && els[idx]) els[idx].scrollIntoView({ block: "center", behavior: force ? "auto" : "smooth" });
+}
+function openLyrics() { if (!cur) return; haptic(); lyrOpen = true; $("#lyrics").classList.add("open"); $("#lyrics").setAttribute("aria-hidden", "false"); lyrLoad(); }
+function closeLyrics() { lyrOpen = false; $("#lyrics").classList.remove("open"); $("#lyrics").setAttribute("aria-hidden", "true"); }
+$("#lyricsBtn").onclick = openLyrics;
+$("#lyricsClose").onclick = closeLyrics;
+$("#lyricsBody").addEventListener("click", (e) => {
+  const p = e.target.closest(".lyr-line");
+  if (p) { haptic(); audio.currentTime = +p.dataset.t; }
+});
+audioEls.forEach((el) => el.addEventListener("timeupdate", () => { if (el === audio) lyrSync(false); }));
+
 /* ---------- Полноэкранный плеер и кнопка «Назад» ---------- */
 const sheetOpen = () => $("#sheet").classList.contains("open");
 function openSheet() {
@@ -495,6 +548,7 @@ function openSheet() {
   syncBack();
 }
 function closeSheet() {
+  closeLyrics();
   $("#sheet").classList.remove("open");
   $("#sheet").setAttribute("aria-hidden", "true");
   syncBack();

@@ -655,3 +655,32 @@ input[type=range]::-webkit-slider-runnable-track { background: linear-gradient(t
 .play { box-shadow: 0 10px 34px rgba(255, 255, 255, .18); }
 
 ::selection { background: rgba(30, 215, 96, .35); }
+
+/* ============================================================
+   ТЕКСТ ПЕСНИ (синхронный, как у Spotify)
+   ============================================================ */
+.lyr-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 46px; margin-top: 12px; border-radius: 999px; background: rgba(255, 255, 255, .1); color: #fff; font-weight: 700; font-size: 14px; flex: none; transition: transform .15s var(--ease), background .15s; }
+.lyr-btn:active { transform: scale(.97); background: rgba(255, 255, 255, .16); }
+.lyr-btn .ic { width: 20px; height: 20px; }
+#lyrics {
+  position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column;
+  background: linear-gradient(180deg, rgba(30, 215, 96, .28), rgba(18, 18, 18, .96) 60%), #121212;
+  -webkit-backdrop-filter: blur(30px); backdrop-filter: blur(30px);
+  transform: translateY(100%); visibility: hidden; transition: transform .45s var(--ease), visibility 0s .45s;
+}
+#lyrics.open { transform: none; visibility: visible; transition: transform .45s var(--ease); }
+.lyr-top { display: flex; align-items: center; justify-content: space-between; padding: calc(var(--sat) + 8px) 18px 6px; flex: none; }
+.lyr-top .ib { background: rgba(255, 255, 255, .1); width: 40px; min-width: 40px; height: 40px; }
+.lyr-top i { width: 40px; }
+.lyr-title { text-align: center; min-width: 0; flex: 1; padding: 0 8px; }
+.lyr-title b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lyr-title span { display: block; font-size: 12.5px; color: rgba(255, 255, 255, .65); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lyr-body { flex: 1; overflow-y: auto; padding: 10px 26px calc(var(--sab) + 24px); scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.lyr-body::-webkit-scrollbar { display: none; }
+.lyr-pad { height: 32vh; }
+.lyr-line { margin: 0; padding: 9px 0; font: 800 28px/1.2 var(--font); letter-spacing: -.02em; color: rgba(255, 255, 255, .32); transition: color .3s, transform .3s var(--ease); transform-origin: left center; }
+.lyr-line.past { color: rgba(255, 255, 255, .5); }
+.lyr-line.on { color: #fff; transform: scale(1.03); text-shadow: 0 0 24px rgba(255, 255, 255, .25); }
+.lyr-plain { padding: 8px 0 24px; }
+.lyr-plain p { margin: 0 0 22px; font: 700 21px/1.4 var(--font); color: #fff; user-select: text; -webkit-user-select: text; }
+@media (max-height: 700px) { .lyr-line { font-size: 24px; } }
