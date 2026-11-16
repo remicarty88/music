@@ -572,7 +572,7 @@ document.addEventListener("click", (e) => {
 });
 
 const setView = (html) => { $("#view").innerHTML = html; };
-const loading = () => setView(`<div class="msg">Загрузка</div>`);
+const loading = () => setView(`<div class="skel">${"<div class=\"skel-row\"><i></i><b><u></u><u></u></b></div>".repeat(9)}</div>`);
 const failed = (e) => setView(`<div class="msg err">${esc(e.message)}</div>`);
 const needToken = (what) => setView(`<div class="msg">${ic("lock")}<br>${what} нужен вход в Яндекс Музыку.</div>`);
 
@@ -746,32 +746,38 @@ const bootEl = $("#boot");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function hideBoot() {
   document.body.classList.remove("booting");
-  if (!bootEl) return;
+  if (!bootEl || !bootEl.isConnected) return;
   bootEl.classList.add("out");
   setTimeout(() => bootEl.remove(), 600);
 }
-async function fetchIds() {
-  // Сервер на Railway может «просыпаться» — пробуем несколько раз, не показывая ошибок
+async function retry(fn, n = 3) {
   let last;
-  for (let k = 0; k < 4; k++) {
-    try { return await api("likes/ids"); } catch (e) {
+  for (let k = 0; k < n; k++) {
+    try { return await fn(); } catch (e) {
       last = e;
       if (/Telegram|BOT_TOKEN|доступ/i.test(e.message)) throw e;
-      const m = $("#bootMsg"); if (m && k >= 1) m.textContent = "Подключаемся…";
-      await sleep(700 * (k + 1));
+      await sleep(400 * (k + 1));
     }
   }
   throw last;
+}
+// Лайки грузим в фоне: они медленные, а интерфейсу нужны только для сердечек
+function loadLikes() {
+  retry(() => api("likes/ids")).then((l) => {
+    for (const k of ["track", "artist", "album"]) S.liked[k] = new Set((l[k + "s"] || []).map(String));
+    ["track", "artist", "album"].forEach((k) => document.querySelectorAll(`[data-like="${k}"]`).forEach((el) => {
+      el.classList.toggle("on", S.liked[k].has(el.dataset.bare));
+    }));
+  }).catch(() => {});
 }
 async function init() {
   const t0 = performance.now();
   updateModeButtons();
   let fatal = null;
-  try {
-    const l = await fetchIds();
-    S.authorized = !!l.authorized;
-    for (const k of ["track", "artist", "album"]) S.liked[k] = new Set((l[k + "s"] || []).map(String));
-  } catch (e) { fatal = e; }
+  const cached = store.get("ton.auth");
+  if (cached != null) S.authorized = cached === "1";   // знаем с прошлого раза — не ждём сеть
+  const check = retry(() => api("auth")).then((a) => { S.authorized = !!a.authorized; store.set("ton.auth", a.authorized ? "1" : "0"); });
+  if (cached == null) { try { await check; } catch (e) { fatal = e; } } else { check.catch(() => {}); }
   api("status").then((s) => {
     $("#who").textContent = s.authorized ? "" : "без входа, отрывки по 30 с";
   }).catch(() => {});
@@ -781,11 +787,12 @@ async function init() {
     setView(`<div class="msg err">Не удалось подключиться.<br><button class="btn" id="retry" style="margin-top:16px">Повторить</button></div>`);
     $("#retry").onclick = () => location.reload();
   } else {
-    await route();
+    route();           // не ждём данные страницы: сразу скелетоны
+    loadLikes();
   }
-  const left = 650 - (performance.now() - t0);   // прелоадер минимум ~0.65 c, чтобы не мигал
+  const left = 450 - (performance.now() - t0);
   if (left > 0) await sleep(left);
   hideBoot();
 }
 init();
-setTimeout(hideBoot, 15000);   // страховка
+setTimeout(hideBoot, 8000);   // страховка

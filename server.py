@@ -405,26 +405,48 @@ def _bare(i):
     return str(i).split(":")[0]
 
 
+@app.get("/api/auth")
+def auth_fast():
+    """Мгновенный ответ без похода в Яндекс — по нему фронтенд сразу рисует интерфейс."""
+    return jsonify({"authorized": bool(TOKEN)})
+
+
+_ids_cache = {"t": 0.0, "v": None}
+
+
+def _fetch_ids():
+    from concurrent.futures import ThreadPoolExecutor
+
+    def tracks():
+        return [str(s.id) for s in (client.users_likes_tracks().tracks or [])]
+
+    def artists():
+        return [str(getattr(l, "id", None) or l.artist.id) for l in (client.users_likes_artists() or [])]
+
+    def albums():
+        return [str(getattr(l, "id", None) or l.album.id) for l in (client.users_likes_albums() or [])]
+
+    def safe(fn):
+        try:
+            return fn()
+        except Exception:
+            return []
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        ft, fa, fb = ex.submit(safe, tracks), ex.submit(safe, artists), ex.submit(safe, albums)
+        return {"tracks": ft.result(), "artists": fa.result(), "albums": fb.result(), "authorized": True}
+
+
 @app.get("/api/likes/ids")
 def likes_ids():
-    """Все лайки одним запросом — чтобы фронтенд мог рисовать сердечки."""
+    """Все лайки одним запросом (параллельно + кэш на минуту) — для сердечек."""
     if not TOKEN:
         return jsonify({"tracks": [], "artists": [], "albums": [], "authorized": False})
-    out = {"tracks": [], "artists": [], "albums": [], "authorized": True}
-    try:
-        out["tracks"] = [str(s.id) for s in (client.users_likes_tracks().tracks or [])]
-    except Exception:
-        pass
-    try:
-        out["artists"] = [str(getattr(l, "id", None) or l.artist.id)
-                          for l in (client.users_likes_artists() or [])]
-    except Exception:
-        pass
-    try:
-        out["albums"] = [str(getattr(l, "id", None) or l.album.id)
-                         for l in (client.users_likes_albums() or [])]
-    except Exception:
-        pass
+    now = time.time()
+    if _ids_cache["v"] is not None and now - _ids_cache["t"] < 60:
+        return jsonify(_ids_cache["v"])
+    out = _fetch_ids()
+    _ids_cache["v"], _ids_cache["t"] = out, now
     return jsonify(out)
 
 
@@ -452,6 +474,7 @@ def likes_albums():
 
 @app.post("/api/like")
 def like():
+    _ids_cache["t"] = 0.0
     """Тело: {"kind": "track"|"artist"|"album", "id": "...", "like": true|false}"""
     if not TOKEN:
         return need_token()
@@ -476,6 +499,7 @@ def like():
 
 @app.post("/api/dislike")
 def dislike():
+    _ids_cache["t"] = 0.0
     """Тело: {"id": "...", "dislike": true|false}. Дизлайк заодно снимает лайк."""
     if not TOKEN:
         return need_token()
