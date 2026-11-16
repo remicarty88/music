@@ -37,7 +37,7 @@ const fmt = (sec) => {
   return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0");
 };
 const big = (url) => (url ? url.replace("200x200", "400x400") : "");
-const coverImg = (url, cls = "cover") => `<img class="${cls}" src="${esc(url || "")}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">`;
+const coverImg = (url, cls = "cover") => `<img class="${cls}" src="${esc(url || "")}" alt="" decoding="async" onload="this.classList.add('ld')" onerror="this.classList.add('ld');this.style.visibility='hidden'">`;
 
 let toastTimer = null;
 function toast(msg) {

@@ -571,3 +571,36 @@ input[type=range]::-webkit-slider-runnable-track { height: 4px; }
 .s-quality button.on { background: var(--accent); color: #000; }
 .boot-glow { background: radial-gradient(circle, rgba(30, 215, 96, .30), transparent 70%); }
 #boot { background: #121212; }
+
+/* ============================================================
+   ФИКСЫ: обложки, ровные отступы, чистая нижняя панель
+   ============================================================ */
+/* Обложки видны всегда (раньше ждали класс .ld, которого не было) */
+.cover { opacity: 1; background: #282828; animation: coverIn .4s var(--ease) both; }
+@keyframes coverIn { from { opacity: 0; } to { opacity: 1; } }
+.row .cover, .mini-np .cover { flex: none; }
+
+/* Чипы: первый чип встаёт ровно по краю контента, а не прилипает к экрану */
+.chips, .chips.wrap { scroll-snap-type: none; scroll-padding-inline: 20px; }
+.chips::after { content: ""; flex: none; width: 4px; }
+h2 { padding: 0; margin: 28px 0 12px; }
+h2:has(+ .chips.wrap) { margin: 18px 0 8px; font-size: 14px; letter-spacing: .02em; color: #b3b3b3; }
+
+/* Нижняя панель сплошная — текст больше не просвечивает между плеером и вкладками */
+#tabs { background: #121212; border-top: 1px solid rgba(255, 255, 255, .07); }
+body { padding-bottom: calc(var(--tab-h) + var(--sab) + 28px); }
+body.has-player { padding-bottom: calc(var(--tab-h) + var(--mini-h) + var(--sab) + 40px); }
+
+/* Ровная сетка трека: обложка | текст | сердце | время */
+.row { grid-template-columns: 52px minmax(0, 1fr) 40px 38px; gap: 12px; padding: 8px; }
+.heart { width: 40px; height: 40px; }
+.t-time { min-width: 38px; padding: 0; text-align: right; }
+.t-title { font-size: 16px; line-height: 1.25; }
+.t-sub { font-size: 13.5px; margin-top: 2px; }
+.row.playing::before { background-origin: content-box; }
+
+/* Мини-плеер: обложка и текст ровно по центру */
+#mini { padding: 0 6px 0 8px; gap: 8px; }
+.mini-np { gap: 10px; }
+.mini-np .t-title { font-size: 14.5px; font-weight: 600; }
+.mini-np .t-sub { font-size: 12.5px; }
