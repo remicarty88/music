@@ -483,3 +483,91 @@ input[type=range]:active::-webkit-slider-thumb { transform: scale(1.3); }
 
 @media (max-height: 700px) { .play { width: 66px; height: 66px; } }
 @media (min-width: 700px) { #tabs { width: 420px; } }
+
+/* ============================================================
+   SPOTIFY STYLE — #121212, зелёный акцент, плоские карточки
+   ============================================================ */
+:root {
+  --bg: #121212; --card: #181818; --card-2: #282828; --card-3: #333;
+  --muted: #b3b3b3; --accent: #1ed760; --accent-2: #1db954; --accent-ink: #000; --like: #1ed760;
+  --glass: #282828; --glass-line: transparent; --tab-h: 60px; --mini-h: 60px;
+}
+html { background: #121212; }
+body {
+  background: linear-gradient(180deg, rgba(30, 215, 96, .20) 0, rgba(18, 18, 18, 1) 340px) no-repeat, #121212;
+  background-attachment: scroll; font-family: var(--font);
+}
+#top { background: linear-gradient(rgba(18, 18, 18, .92), rgba(18, 18, 18, 0)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+.dot { box-shadow: none; background: var(--accent); }
+#who { background: #282828; color: #b3b3b3; }
+h2 { font: 800 22px/1.2 var(--font); letter-spacing: -.02em; }
+.msg { background: transparent; }
+
+/* Чипы как у Spotify: серые, активный — зелёный */
+.chip { background: #2a2a2a; border: 0; box-shadow: none; font-weight: 600; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.chip.on { background: var(--accent); color: #000; box-shadow: none; }
+
+/* Поиск: белая плашка */
+.searchbox input { background: #fff; color: #000; border: 0; border-radius: 8px; height: 50px; font-weight: 600; }
+.searchbox input::placeholder { color: #5f5f5f; }
+.searchbox input:focus { background: #fff; box-shadow: 0 0 0 2px #fff; }
+.searchbox .ic { color: #000; }
+
+/* Треки */
+.row { grid-template-columns: 52px 1fr auto auto; min-height: 68px; margin: 0 -8px; padding: 8px; border-radius: 6px; }
+.row:active { background: #2a2a2a; transform: none; }
+.row.playing { background: none; }
+.row.playing .t-title { color: var(--accent); }
+.row.playing::before { left: 8px; width: 52px; height: 52px; margin-top: -26px; border-radius: 4px; padding: 14px 12px; }
+.cover { width: 52px; height: 52px; border-radius: 4px; box-shadow: none; }
+.t-title { font-weight: 500; }
+.heart.on { filter: none; color: var(--accent); }
+
+/* Карточки */
+.card { background: #181818; padding: 12px; border-radius: 8px; transition: background .2s, transform .2s var(--ease); }
+.card:active { background: #282828; transform: scale(.97); }
+.card .cover { border-radius: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
+.card.round .cover { border-radius: 50%; }
+.c-title { margin-top: 12px; font-weight: 700; }
+
+/* Шапки страниц */
+.hero > .cover, .hero > .wave-orb { border-radius: 8px; box-shadow: 0 16px 48px rgba(0, 0, 0, .7); }
+.hero.artist > .cover { border-radius: 50%; }
+.hero h1 { font: 800 30px/1.1 var(--font); letter-spacing: -.03em; }
+.btn { background: var(--accent); color: #000; box-shadow: none; font-weight: 800; }
+.btn:active { transform: scale(.96); filter: brightness(.9); }
+.btn.ghost { background: transparent; color: #fff; border: 1px solid #727272; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.wave-orb { border-radius: 8px !important; }
+
+/* Мини-плеер */
+#mini { bottom: calc(var(--tab-h) + var(--sab) + 8px); width: min(calc(100% - 16px), 624px); border-radius: 8px; background: #2c2c2c; border: 0; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
+.mini-np .cover { width: 42px; height: 42px; border-radius: 4px; }
+#miniPlay { background: transparent; color: #fff; }
+#miniPlay .ic { width: 26px; height: 26px; }
+.mini-bar { left: 8px; right: 8px; bottom: 3px; height: 2px; background: rgba(255, 255, 255, .25); }
+
+/* Нижняя панель: плоская, затухающая */
+#tabs { left: 0; right: 0; transform: none; width: auto; bottom: 0; padding-bottom: var(--sab); background: linear-gradient(rgba(18, 18, 18, 0), rgba(18, 18, 18, .96) 35%, #121212); }
+.tabs-in { padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; max-width: 640px; }
+#tabs a { height: var(--tab-h); border-radius: 0; background: none !important; color: #b3b3b3; font-size: 11px; font-weight: 600; }
+#tabs a.on { color: #fff; }
+#tabs a.on .ic { fill: #fff; }
+#toast { background: #fff; color: #000; border: 0; border-radius: 8px; -webkit-backdrop-filter: none; backdrop-filter: none; }
+
+/* Полноэкранный плеер */
+.sheet-bg { filter: blur(80px) saturate(1.6); opacity: .8; }
+#sheet::after { background: linear-gradient(rgba(18, 18, 18, .1), #121212 88%); }
+.sheet-top .ib { background: transparent; }
+.sheet-top { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 700; color: #fff; }
+.s-art img { border-radius: 8px; box-shadow: 0 24px 64px rgba(0, 0, 0, .65); }
+.s-meta .t-title { font: 800 24px/1.2 var(--font); letter-spacing: -.02em; }
+input[type=range]::-webkit-slider-thumb { width: 12px; height: 12px; margin-top: -4px; opacity: 0; box-shadow: none; transition: opacity .15s; }
+input[type=range]:active::-webkit-slider-thumb { opacity: 1; transform: none; }
+input[type=range]::-webkit-slider-runnable-track { height: 4px; }
+.play { width: 68px; height: 68px; background: #fff; color: #000; box-shadow: none; }
+.s-ctrl .ib.on { color: var(--accent); filter: none; }
+.s-quality { background: transparent; padding: 0; gap: 8px; }
+.s-quality button { height: 36px; border-radius: 999px; background: #2a2a2a; color: #fff; font-weight: 600; }
+.s-quality button.on { background: var(--accent); color: #000; }
+.boot-glow { background: radial-gradient(circle, rgba(30, 215, 96, .30), transparent 70%); }
+#boot { background: #121212; }

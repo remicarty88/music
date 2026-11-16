@@ -8,11 +8,11 @@ const ic = (name, cls = "") => `<svg class="ic ${cls}" aria-hidden="true"><use h
 /* ---------- Telegram Mini App ---------- */
 const tg = window.Telegram && window.Telegram.WebApp;
 const inTg = !!(tg && tg.initData);
-const BG = "#000000";
+const BG = "#121212";
 if (tg) {
   try { tg.ready(); tg.expand(); } catch (_) {}
   try { tg.disableVerticalSwipes(); } catch (_) {}          // свайп вниз не закрывает приложение
-  try { tg.setHeaderColor(BG); tg.setBackgroundColor(BG); tg.setBottomBarColor("#000000"); } catch (_) {}
+  try { tg.setHeaderColor(BG); tg.setBackgroundColor(BG); tg.setBottomBarColor("#121212"); } catch (_) {}
 }
 const haptic = (kind = "light") => { try { tg.HapticFeedback.impactOccurred(kind); } catch (_) {} };
 const hapticNote = (kind) => { try { tg.HapticFeedback.notificationOccurred(kind); } catch (_) {} };
