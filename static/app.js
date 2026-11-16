@@ -8,11 +8,11 @@ const ic = (name, cls = "") => `<svg class="ic ${cls}" aria-hidden="true"><use h
 /* ---------- Telegram Mini App ---------- */
 const tg = window.Telegram && window.Telegram.WebApp;
 const inTg = !!(tg && tg.initData);
-const BG = "#0c0c10";
+const BG = "#000000";
 if (tg) {
   try { tg.ready(); tg.expand(); } catch (_) {}
   try { tg.disableVerticalSwipes(); } catch (_) {}          // свайп вниз не закрывает приложение
-  try { tg.setHeaderColor(BG); tg.setBackgroundColor(BG); tg.setBottomBarColor("#15151b"); } catch (_) {}
+  try { tg.setHeaderColor(BG); tg.setBackgroundColor(BG); tg.setBottomBarColor("#000000"); } catch (_) {}
 }
 const haptic = (kind = "light") => { try { tg.HapticFeedback.impactOccurred(kind); } catch (_) {} };
 const hapticNote = (kind) => { try { tg.HapticFeedback.notificationOccurred(kind); } catch (_) {} };
@@ -141,6 +141,7 @@ let seeking = false;
 const streamKey = (t, q = S.quality) => t.id + "|" + q;
 const streamCache = new Map();    // "id|quality" -> кодек/битрейт (для подписи качества)
 let prefetchKey = null;           // что сейчас готовим в свободном элементе
+const qinfoEl = { textContent: "" };   // подпись качества убрана из интерфейса
 const qinfo = (s) => `${String(s.codec || "").toUpperCase()}, ${s.bitrate || "?"} кбит/с`;
 
 /* Звук идёт через наш прокси: так источник same-origin и работает Web Audio (эквалайзер).
@@ -157,7 +158,7 @@ async function getStream(t, quality = S.quality) {
 }
 
 function showQinfo(t) {
-  getStream(t).then((s) => { if (cur === t) $("#qinfo").textContent = qinfo(s); }).catch(() => {});
+  getStream(t).then((s) => { if (cur === t) qinfoEl.textContent = qinfo(s); }).catch(() => {});
 }
 
 /* iOS разрешает звук только после касания. Прогреваем тишиной оба элемента при первом
@@ -175,7 +176,7 @@ function unlockAudio() {
   dv.setUint32(28, 16000, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
   w(36, "data"); dv.setUint32(40, 0, true);
   const url = URL.createObjectURL(new Blob([dv], { type: "audio/wav" }));
-  audioEls.forEach((el) => { el.src = url; el.play().then(() => el.pause()).catch(() => {}); });
+  audioEls.forEach((el) => { el.src = url; el.play().then(() => { if (el.src === url) el.pause(); }).catch(() => {}); });
 }
 ["touchend", "click"].forEach((ev) => document.addEventListener(ev, unlockAudio, { once: true, capture: true }));
 
@@ -209,6 +210,21 @@ async function playList(list, i) {
   await playAt(i);
 }
 
+/* play() может прерваться (AbortError) из-за смены src/паузы — это не ошибка трека, пробуем ещё раз */
+async function playWithRetry(token) {
+  let last;
+  for (let k = 0; k < 4; k++) {
+    if (token !== loadToken) return;
+    try { await audio.play(); return; } catch (e) {
+      last = e;
+      if (e.name === "NotAllowedError") throw e;
+      await new Promise((r) => setTimeout(r, 250 * (k + 1)));
+      if (k === 2 && audio.error) { audio.load(); }   // реально сломанный источник — перезагружаем
+    }
+  }
+  throw last;
+}
+
 async function playAt(i) {
   if (i < 0 || i >= queue.length) return;
   qi = i;
@@ -226,14 +242,21 @@ async function playAt(i) {
   const key = streamKey(cur);
   const prepared = el.dataset.key === key;   // следующий трек уже загружен заранее?
 
-  audio.pause();            // глушим текущий звук
+  const bg = document.hidden;   // экран выключен / приложение свёрнуто
   prefetchKey = null;       // следующий пересчитаем после старта
-  swap();                   // активным становится подготовленный элемент
-  audio.currentTime = 0;
-  if (!prepared) { audio.dataset.key = key; audio.src = audioUrl(cur); }
+  if (bg) {
+    // В фоне iOS разрешает продолжать только уже «живой» <audio>: меняем src у него же, без паузы
+    audio.dataset.key = key; audio.src = audioUrl(cur);
+  } else {
+    audio.pause();          // глушим текущий звук
+    swap();                 // активным становится подготовленный элемент
+    audio.currentTime = 0;
+    if (!prepared) { audio.dataset.key = key; audio.src = audioUrl(cur); }
+  }
 
   try {
-    await audio.play();
+    await playWithRetry(token);
+    if (token !== loadToken) return;
     resumeAudio();
     if (wave) fb("trackStarted", cur, 0);
     prefetchNext();
@@ -241,7 +264,7 @@ async function playAt(i) {
   } catch (e) {
     if (token !== loadToken) return;
     if (e.name === "NotAllowedError") toast("Нажмите «Играть», чтобы начать");
-    else { $("#qinfo").textContent = "Не удалось воспроизвести: " + e.message; toast("Не удалось воспроизвести трек"); }
+    else { qinfoEl.textContent = "Не удалось воспроизвести: " + e.message; toast("Не удалось воспроизвести трек"); }
   }
 }
 
@@ -417,193 +440,50 @@ document.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click",
     resumeAudio();
     showQinfo(cur);
     prefetchNext();
-  } catch (err) { $("#qinfo").textContent = "Не удалось сменить качество: " + err.message; }
+  } catch (err) { qinfoEl.textContent = "Не удалось сменить качество: " + err.message; }
 }));
 
-/* ---------- Эквалайзер «автозвук» ----------
-   Цепь: <audio> → MediaElementSource → фильтры по всем частотам → выход.
-   В UI выбираешь конкретную частоту (33, 35, 37 Гц и т.д.) и крутишь её уровень.
-   Гейны меняются на ходу — «герцовку» выставляешь прямо во время трека. */
-let actx = null, eqNodes = null;
+/* Эквалайзер удалён */
+const actx = null;
+function ensureEq() {}
+function resumeAudio() {}
 
-function ensureEq() {
-  if (actx) return;
-  const Ctx = window.AudioContext || window.webkitAudioContext;
-  if (!Ctx) return;
-  try {
-    actx = new Ctx();
-    const input = actx.createGain();
-    // Один фильтр на каждую частоту. Крайние — полочные (low/highshelf),
-    // остальные — пиковые (peaking), как в реальном эквалайзере.
-    const filters = EQ_FREQS.map((f, i) => {
-      const n = actx.createBiquadFilter();
-      n.type = i === EQ_FREQS.length - 1 ? "highshelf" : "peaking";
-      n.frequency.value = f;
-      // Широкие полосы (низкий Q): узкие полосы резонируют и «пердят».
-      n.Q.value = 0.8;
-      n.gain.value = 0;
-      return n;
-    });
-    let node = input;
-    filters.forEach((f) => { node.connect(f); node = f; });
-    // Мастер-gain: при подъёме низа общий уровень растёт и клиппирует.
-    // Опускаем выход, чтобы бас был мощным, но без искажений.
-    const master = actx.createGain();
-    master.gain.value = 1.0;
-    node.connect(master);
-    master.connect(actx.destination);
-    audioEls.forEach((el) => actx.createMediaElementSource(el).connect(input));
-    eqNodes = { filters, master };
-    applyEq();
-  } catch (_) {
-    actx = null; eqNodes = null;   // не вышло — просто играем без эквалайзера
-  }
-}
-
-function applyEq() {
-  if (!eqNodes) return;
-  let maxBoost = 0;
-  eqNodes.filters.forEach((f) => {
-    const g = S.eqOn ? (S.eqGain[f.frequency.value] || 0) : 0;
-    f.gain.value = g;
-    if (g > maxBoost) maxBoost = g;
-  });
-  // Чем сильнее поднят эквалайзер — тем больше опускаем мастер,
-  // чтобы не было клиппинга («пердения»).
-  if (eqNodes.master) {
-    const reduce = Math.pow(10, -maxBoost / 20);
-    eqNodes.master.gain.setTargetAtTime(reduce, actx.currentTime, 0.02);
-  }
-}
-
-function resumeAudio() {
-  if (actx && actx.state === "suspended") actx.resume().catch(() => {});
-}
-
-function saveEq() {
-  store.set("ton.eqOn", S.eqOn ? "1" : "0");
-  store.set("ton.eqPreset", S.eqPreset);
-  store.set("ton.eqGain", JSON.stringify(S.eqGain));
-  store.set("ton.eqActive", String(S.eqActive));
-}
-
-const fmtDb = (v) => (v > 0 ? "+" + v : String(v));
-const fmtHz = (f) => (f >= 1000 ? (f / 1000) + "k" : String(f));
-
-function renderEqPresets() {
-  const items = [["off", "Выкл"], ...Object.entries(EQ_PRESETS).map(([k, p]) => [k, p.name])];
-  $("#eqPresets").innerHTML = items.map(([k, name]) => {
-    const on = k === "off" ? !S.eqOn : (S.eqOn && S.eqPreset === k);
-    return `<button class="chip ${on ? "on" : ""}" data-eqpreset="${k}">${esc(name)}</button>`;
-  }).join("");
-  $("#eqPresets").querySelectorAll("[data-eqpreset]").forEach((b) => {
-    b.addEventListener("click", () => { haptic(); setEqPreset(b.dataset.eqpreset); });
-  });
-}
-
-/* Кнопки частот + один ползунок для выбранной частоты. */
-function renderEqFreqs() {
-  const wrap = $("#eqFreqs");
-  wrap.innerHTML = EQ_FREQS.map((f) => {
-    const v = S.eqGain[f] || 0;
-    const on = f === S.eqActive;
-    const mark = v !== 0;   // подсветим частоты, у которых есть коррекция
-    return `<button class="eq-freq ${on ? "on" : ""} ${mark ? "mark" : ""}" data-freq="${f}">
-      <span class="eq-f-hz">${fmtHz(f)}</span>
-      <span class="eq-f-db">${fmtDb(v)}</span>
-    </button>`;
-  }).join("");
-  wrap.querySelectorAll("[data-freq]").forEach((b) => {
-    b.addEventListener("click", () => { haptic(); setActiveFreq(+b.dataset.freq); });
-  });
-  renderEqSlider();
-}
-
-function renderEqSlider() {
-  const f = S.eqActive;
-  const v = S.eqGain[f] || 0;
-  $("#eqSliderVal").textContent = fmtHz(f) + " Гц · " + fmtDb(v) + " дБ";
-  const s = $("#eqSlider");
-  s.value = v;
-  s.style.setProperty("--p", ((v + 12) / 24) * 100 + "%");
-  s.setAttribute("aria-label", f + " Гц");
-}
-
-/* При клике на 33-37 Гц — плавный суб-бас. Узкие пики резонируют и «пердят»,
-   поэтому горб широкий (Q низкий), а мастер-gain сам опускает уровень против клиппинга. */
-function setActiveFreq(f) {
-  S.eqActive = f;
-  if (f <= 50) {
-    const sub = { 33: 10, 35: 12, 37: 11, 40: 8, 45: 5, 50: 2 };
-    EQ_FREQS.forEach((fr) => { S.eqGain[fr] = sub[fr] != null ? sub[fr] : (fr < 200 ? -2 : 0); });
-    S.eqOn = true;
-    S.eqPreset = "custom";
-  }
-  saveEq();
-  applyEq();
-  renderEqPresets();
-  renderEqFreqs();
-}
-
-$("#eqSlider").addEventListener("input", () => {
-  const f = S.eqActive, v = +$("#eqSlider").value;
-  S.eqGain[f] = v;
-  S.eqOn = true;
-  S.eqPreset = "custom";
-  saveEq();
-  applyEq();
-  $("#eqSliderVal").textContent = fmtHz(f) + " Гц · " + fmtDb(v) + " дБ";
-  $("#eqSlider").style.setProperty("--p", ((v + 12) / 24) * 100 + "%");
-  // обновим подпись у кнопки частоты и подсветку
-  const btn = $("#eqFreqs").querySelector(`[data-freq="${f}"]`);
-  if (btn) {
-    btn.querySelector(".eq-f-db").textContent = fmtDb(v);
-    btn.classList.toggle("mark", v !== 0);
-  }
-  $("#eqPresets").querySelectorAll(".chip").forEach((c) => c.classList.remove("on"));
-});
-
-function setEqPreset(k) {
-  if (k === "off") {
-    S.eqOn = false;
-  } else if (EQ_PRESETS[k]) {
-    S.eqOn = true;
-    S.eqPreset = k;
-    const src = EQ_PRESETS[k].gain;
-    EQ_FREQS.forEach((f) => { S.eqGain[f] = src[f] || 0; });
-  }
-  saveEq();
-  applyEq();
-  renderEqPresets();
-  renderEqFreqs();
-}
-
-$("#eqToggle").addEventListener("click", () => {
-  const show = $("#eqBody").hidden;
-  $("#eqBody").hidden = !show;
-  $("#eqToggle").setAttribute("aria-expanded", show ? "true" : "false");
-});
-
-renderEqPresets();
-renderEqFreqs();
-
-/* Экран блокировки и медиаклавиши */
+/* Экран блокировки, Пункт управления и работа при выключенном экране */
+const msOK = "mediaSession" in navigator;
 function updateMediaSession() {
-  if (!("mediaSession" in navigator) || !cur) return;
+  if (!msOK || !cur) return;
   try {
+    const c = cur.cover ? big(cur.cover) : "";
     navigator.mediaSession.metadata = new MediaMetadata({
       title: cur.title, artist: cur.artists, album: (cur.album && cur.album.title) || "",
-      artwork: cur.cover ? [{ src: big(cur.cover), sizes: "400x400" }] : [],
+      artwork: c ? [96, 192, 256, 384, 512].map((n) => ({ src: c, sizes: n + "x" + n, type: "image/jpeg" })) : [],
     });
   } catch (_) {}
 }
-try {
-  const ms = navigator.mediaSession;
-  ms.setActionHandler("play", () => audio.play());
-  ms.setActionHandler("pause", () => audio.pause());
-  ms.setActionHandler("previoustrack", () => $("#prev").click());
-  ms.setActionHandler("nexttrack", () => advance());
-} catch (_) {}
+let lastPos = 0;
+function updatePosition() {
+  if (!msOK || !audio.duration || !isFinite(audio.duration)) return;
+  const now = Date.now();
+  if (now - lastPos < 1000) return;
+  lastPos = now;
+  try { navigator.mediaSession.setPositionState({ duration: audio.duration, playbackRate: audio.playbackRate || 1, position: Math.min(audio.currentTime, audio.duration) }); } catch (_) {}
+}
+function setMs(action, fn) { try { navigator.mediaSession.setActionHandler(action, fn); } catch (_) {} }
+if (msOK) {
+  setMs("play", () => audio.play().catch(() => {}));
+  setMs("pause", () => audio.pause());
+  setMs("previoustrack", () => $("#prev").click());
+  setMs("nexttrack", () => advance());
+  setMs("seekbackward", (d) => { audio.currentTime = Math.max(0, audio.currentTime - ((d && d.seekOffset) || 10)); });
+  setMs("seekforward", (d) => { audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + ((d && d.seekOffset) || 10)); });
+  setMs("seekto", (d) => { if (d && d.seekTime != null) audio.currentTime = d.seekTime; });
+  audioEls.forEach((el) => {
+    el.addEventListener("play", () => { if (el === audio) navigator.mediaSession.playbackState = "playing"; });
+    el.addEventListener("pause", () => { if (el === audio) navigator.mediaSession.playbackState = "paused"; });
+    el.addEventListener("timeupdate", () => { if (el === audio) updatePosition(); });
+    el.addEventListener("loadedmetadata", () => { if (el === audio) { lastPos = 0; updatePosition(); } });
+  });
+}
 
 /* ---------- Полноэкранный плеер и кнопка «Назад» ---------- */
 const sheetOpen = () => $("#sheet").classList.contains("open");
@@ -694,8 +574,7 @@ document.addEventListener("click", (e) => {
 const setView = (html) => { $("#view").innerHTML = html; };
 const loading = () => setView(`<div class="msg">Загрузка</div>`);
 const failed = (e) => setView(`<div class="msg err">${esc(e.message)}</div>`);
-const needToken = (what) => setView(`<div class="msg">${ic("lock")}<br>${what} нужен токен Яндекс Музыки.
-  <small>Задайте YANDEX_MUSIC_TOKEN в настройках сервера и перезапустите его.</small></div>`);
+const needToken = (what) => setView(`<div class="msg">${ic("lock")}<br>${what} нужен вход в Яндекс Музыку.</div>`);
 
 /* ---------- Страницы ---------- */
 const myTabs = (active) => `<div class="chips">` + [["", "Треки"], ["artists", "Исполнители"], ["albums", "Альбомы"]]
@@ -863,18 +742,50 @@ function route() {
 window.addEventListener("hashchange", route);
 
 /* ---------- Запуск ---------- */
+const bootEl = $("#boot");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function hideBoot() {
+  document.body.classList.remove("booting");
+  if (!bootEl) return;
+  bootEl.classList.add("out");
+  setTimeout(() => bootEl.remove(), 600);
+}
+async function fetchIds() {
+  // Сервер на Railway может «просыпаться» — пробуем несколько раз, не показывая ошибок
+  let last;
+  for (let k = 0; k < 4; k++) {
+    try { return await api("likes/ids"); } catch (e) {
+      last = e;
+      if (/Telegram|BOT_TOKEN|доступ/i.test(e.message)) throw e;
+      const m = $("#bootMsg"); if (m && k >= 1) m.textContent = "Подключаемся…";
+      await sleep(700 * (k + 1));
+    }
+  }
+  throw last;
+}
 async function init() {
+  const t0 = performance.now();
   updateModeButtons();
+  let fatal = null;
   try {
-    const l = await api("likes/ids");
+    const l = await fetchIds();
     S.authorized = !!l.authorized;
     for (const k of ["track", "artist", "album"]) S.liked[k] = new Set((l[k + "s"] || []).map(String));
-  } catch (e) {
-    if (/Telegram|BOT_TOKEN|доступ/i.test(e.message)) { setView(`<div class="msg err">${ic("lock")}<br>${esc(e.message)}</div>`); return; }
-  }
+  } catch (e) { fatal = e; }
   api("status").then((s) => {
     $("#who").textContent = s.authorized ? "" : "без входа, отрывки по 30 с";
   }).catch(() => {});
-  route();
+  if (fatal && /Telegram|BOT_TOKEN|доступ/i.test(fatal.message)) {
+    setView(`<div class="msg err">${ic("lock")}<br>${esc(fatal.message)}</div>`);
+  } else if (fatal) {
+    setView(`<div class="msg err">Не удалось подключиться.<br><button class="btn" id="retry" style="margin-top:16px">Повторить</button></div>`);
+    $("#retry").onclick = () => location.reload();
+  } else {
+    await route();
+  }
+  const left = 650 - (performance.now() - t0);   // прелоадер минимум ~0.65 c, чтобы не мигал
+  if (left > 0) await sleep(left);
+  hideBoot();
 }
 init();
+setTimeout(hideBoot, 15000);   // страховка

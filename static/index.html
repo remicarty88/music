@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Тон">
+<meta name="format-detection" content="telephone=no">
 <title>Тон</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -11,7 +16,17 @@
 <link rel="stylesheet" href="/style.css">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
-<body>
+<body class="booting">
+
+<!-- Прелоадер: закрывает экран, пока приложение не получило данные -->
+<div id="boot" aria-live="polite" aria-label="Загрузка">
+  <div class="boot-glow"></div>
+  <div class="boot-in">
+    <div class="boot-logo">Тон<i class="dot"></i></div>
+    <div class="boot-eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+    <div id="bootMsg" class="boot-msg"></div>
+  </div>
+</div>
 
 <!-- Иконки: Lucide (lucide.dev, лицензия ISC) -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -89,29 +104,13 @@
       <button data-q="standard">Стандарт</button>
       <button data-q="high">Высокое</button>
     </div>
-    <div id="qinfo" class="qinfo"></div>
 
-    <div class="eq">
-      <button id="eqToggle" class="eq-toggle" aria-expanded="false" aria-controls="eqBody">
-        <svg class="ic"><use href="#i-sliders"/></svg>
-        <span>Эквалайзер · автозвук</span>
-        <svg class="ic eq-chev"><use href="#i-down"/></svg>
-      </button>
-      <div id="eqBody" class="eq-body" hidden>
-        <div id="eqPresets" class="chips eq-presets"></div>
-        <div class="eq-freqs" id="eqFreqs"></div>
-        <div class="eq-slider-row">
-          <span id="eqSliderVal" class="eq-slider-val">80 Гц · 0 дБ</span>
-          <input type="range" id="eqSlider" min="-12" max="12" step="1" value="0" aria-label="Уровень частоты">
-        </div>
-      </div>
-    </div>
   </div>
 </section>
 
 <div id="toast" role="status"></div>
-<audio id="audioA" preload="auto" playsinline></audio>
-<audio id="audioB" preload="auto" playsinline></audio>
+<audio id="audioA" preload="auto" playsinline webkit-playsinline x-webkit-airplay="allow"></audio>
+<audio id="audioB" preload="auto" playsinline webkit-playsinline x-webkit-airplay="allow"></audio>
 
 <script src="/app.js"></script>
 </body>
