@@ -396,55 +396,6 @@ def audio(track_id):
 
 
 
-# ---------- Тексты песен ----------
-# Сначала пробуем синхронный LRC (строки с таймкодами), затем обычный текст.
-_lyrics_cache = {}
-_LRC_RE = re.compile(r"\[(\d+):(\d+(?:[.,]\d+)?)\]")
-
-
-def _parse_lrc(raw):
-    lines = []
-    for row in raw.splitlines():
-        stamps = _LRC_RE.findall(row)
-        if not stamps:
-            continue
-        text = _LRC_RE.sub("", row).strip()
-        for m, sec in stamps:
-            lines.append({"t": int(m) * 60 + float(sec.replace(",", ".")), "s": text})
-    lines.sort(key=lambda x: x["t"])
-    return lines
-
-
-@app.get("/api/lyrics/<track_id>")
-def lyrics(track_id):
-    if not TOKEN:
-        return jsonify({"synced": False, "lines": [], "text": ""})
-    hit = _lyrics_cache.get(track_id)
-    if hit:
-        return jsonify(hit)
-    out = {"synced": False, "lines": [], "text": ""}
-    for fmt in ("LRC", "TEXT"):
-        try:
-            l = client.tracks_lyrics(track_id, format_=fmt)
-            raw = l.fetch_lyrics() if l else ""
-        except Exception:
-            raw = ""
-        if not raw or not raw.strip():
-            continue
-        if fmt == "LRC":
-            lines = _parse_lrc(raw)
-            if lines:
-                out = {"synced": True, "lines": lines, "text": ""}
-                break
-        else:
-            out = {"synced": False, "lines": [], "text": raw.strip()}
-            break
-    if len(_lyrics_cache) > 300:
-        _lyrics_cache.clear()
-    _lyrics_cache[track_id] = out
-    return jsonify(out)
-
-
 # ---------- Нравится / не нравится ----------
 
 def need_token():
