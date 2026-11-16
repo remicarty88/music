@@ -72,9 +72,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ALLOWED_IDS = {x.strip() for x in os.getenv("ALLOWED_USER_IDS", "").split(",") if x.strip()}
 ON_RAILWAY = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID"))
 ALLOW_PUBLIC = os.getenv("ALLOW_PUBLIC") == "1"
-if not BOT_TOKEN:
-    print("[ton] ВНИМАНИЕ: BOT_TOKEN не задан — проверка Telegram отключена."
-          + (" На Railway API будет закрыт, пока вы его не зададите." if ON_RAILWAY and not ALLOW_PUBLIC else ""))
+REQUIRE_TELEGRAM = os.getenv("REQUIRE_TELEGRAM") == "1"
 
 
 def verify_init_data(raw, max_age=86400):
@@ -108,10 +106,12 @@ def tg_init_data():
 def guard_api():
     if not request.path.startswith("/api/"):
         return None
-    if not BOT_TOKEN:
-        if ON_RAILWAY and not ALLOW_PUBLIC:
-            return jsonify({"error": "Сервер не настроен: задайте переменную BOT_TOKEN."}), 503
+    # По умолчанию сайт открывается где угодно (Safari, «На экран Домой», Telegram).
+    # Чтобы снова пускать только из Telegram, задайте переменную REQUIRE_TELEGRAM=1.
+    if not REQUIRE_TELEGRAM:
         return None
+    if not BOT_TOKEN:
+        return jsonify({"error": "Сервер не настроен: задайте переменную BOT_TOKEN."}), 503
     user = verify_init_data(tg_init_data())
     if user is None:
         return jsonify({"error": "Откройте приложение из Telegram."}), 401
